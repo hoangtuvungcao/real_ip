@@ -61,11 +61,12 @@ type ShodanResponse struct {
 }
 
 type OriginCandidate struct {
-	IP       string
-	Vector   string
-	Latency  time.Duration
-	Verified bool
-	Details  string
+	IP        string
+	Vector    string
+	Latency   time.Duration
+	Verified  bool
+	Confirmed bool
+	Details   string
 }
 
 type OriginReaper struct {
@@ -363,10 +364,12 @@ func (r *OriginReaper) VerifyUTLS(ip string) bool {
 				vitalStyle.Printf("\n 💎 [DOMINANT MATCH] SNI Validated: %sカバー: %s\n", ip, n)
 				r.mu.Lock()
 				if existing, ok := r.Results[ip]; ok {
-					existing.Verified = true
-					existing.Details += " [SNI_VERIFIED]"
+					if !existing.Verified {
+						existing.Verified = true
+						existing.Details = "SNI_VERIFIED"
+					}
 				} else {
-					r.Results[ip] = &OriginCandidate{IP: ip, Vector: "SNI Verified", Verified: true, Details: "[SNI_VERIFIED]"}
+					r.Results[ip] = &OriginCandidate{IP: ip, Vector: "SNI Verified", Verified: true, Details: "SNI_VERIFIED"}
 				}
 				r.mu.Unlock()
 				return true
@@ -397,6 +400,70 @@ func (r *OriginReaper) TimingAnalysis() {
 			}
 			fmt.Printf(" └── IP: %-15s | RTT: %-12s | Δ: %s\n", c.IP, c.Latency, diff)
 		}
+	}
+}
+
+func (r *OriginReaper) HostHeaderVerify() {
+	headerStyle.Println("\n ┌── [ PHASE 4 ] HTTP Host Header Origin Confirmation")
+	r.mu.Lock()
+	var ips []string
+	for ip := range r.Results {
+		ips = append(ips, ip)
+	}
+	r.mu.Unlock()
+
+	if len(ips) == 0 {
+		yellow.Println(" └── No candidates to verify.")
+		return
+	}
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse // Don't follow redirects
+		},
+	}
+
+	confirmed := 0
+	for _, ip := range ips {
+		// Try HTTPS first, then HTTP
+		for _, scheme := range []string{"https", "http"} {
+			url := fmt.Sprintf("%s://%s/", scheme, ip)
+			req, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				continue
+			}
+			req.Host = r.Domain
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+
+			code := resp.StatusCode
+			if code == 200 || code == 301 || code == 302 || code == 403 {
+				vitalStyle.Printf(" └── [CONFIRMED] %s -> HTTP %d (%s) Host: %s\n", ip, code, scheme, r.Domain)
+				r.mu.Lock()
+				if c, ok := r.Results[ip]; ok {
+					c.Confirmed = true
+					c.Verified = true
+					c.Details = fmt.Sprintf("HTTP %d %s", code, scheme)
+				}
+				r.mu.Unlock()
+				confirmed++
+				break
+			} else {
+				fmt.Printf(" └── %s -> HTTP %d (%s) - not a match\n", ip, code, scheme)
+			}
+		}
+	}
+
+	if confirmed == 0 {
+		yellow.Println(" └── No IPs confirmed via Host Header.")
+	} else {
+		hiGreen.Printf(" └── [OK] %d origin(s) CONFIRMED via direct HTTP.\n", confirmed)
 	}
 }
 
@@ -528,6 +595,7 @@ func main() {
 			for ip := range r {
 				reaper.VerifyUTLS(ip)
 			}
+			reaper.HostHeaderVerify()
 		case "0":
 			return
 		}
@@ -535,13 +603,21 @@ func main() {
 		if len(reaper.Results) > 0 {
 			white.Println("\n ┌──────────────────── TARGET REPORT ────────────────────┐")
 			for ip, c := range reaper.Results {
-				statusTag := "POTENTIAL"
-				if c.Verified {
-					statusTag = "VERIFIED "
+				statusTag := "POTENTIAL "
+				if c.Confirmed {
+					statusTag = "CONFIRMED "
+				} else if c.Verified {
+					statusTag = "VERIFIED  "
 				}
-				line := fmt.Sprintf(" │ %s │ %-15s │ %-18s │", statusTag, ip, c.Vector)
-				if c.Verified {
+				detail := c.Vector
+				if c.Details != "" {
+					detail = c.Details
+				}
+				line := fmt.Sprintf(" │ %s │ %-15s │ %-18s │", statusTag, ip, detail)
+				if c.Confirmed {
 					hiGreen.Println(line)
+				} else if c.Verified {
+					cyan.Println(line)
 				} else {
 					hiYellow.Println(line)
 				}
