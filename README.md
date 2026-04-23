@@ -70,7 +70,7 @@ Select `7` for full auto recon (runs all vectors):
  └── [OK] Discovered 1 historical origins.
 
  [PHASE 1] Hyper-Massive Subdomain Recon (24447 keys)
- ⚡ [FOUND] 103.92.26.115 (Subdomain Leak)
+ [*] [FOUND] 103.92.26.115 (Subdomain Leak)
  └── [DONE] Subdomain scan complete.
 
  [PHASE 2] Subnet Surveillance (CIDR /24)
