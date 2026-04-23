@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -208,55 +210,88 @@ func (r *OriginReaper) ShodanOSINT() {
 }
 
 func (r *OriginReaper) SearchCrtSh() {
-	headerStyle.Println("\n ┌── [ PHASE 0.1 ] Crt.sh Certificate Transparency Recon")
-	url := fmt.Sprintf("https://crt.sh/?q=%%25.%s&output=json", r.Domain)
+	headerStyle.Println("\n ┌── [ PHASE 0.1 ] Certificate Transparency Recon")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil || resp.StatusCode != 200 {
-		yellow.Println(" └── [!] Crt.sh unavailable (server-side), skipping.")
-		return
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	var results []struct {
-		NameValue  string `json:"name_value"`
-		CommonName string `json:"common_name"`
-	}
-	if err := json.Unmarshal(bodyBytes, &results); err != nil {
-		yellow.Println(" └── [!] Crt.sh returned non-JSON (502/503), skipping.")
-		return
-	}
+	// Try crt.sh JSON API first
+	crtURL := fmt.Sprintf("https://crt.sh/?q=%%25.%s&output=json", r.Domain)
+	client := &http.Client{Timeout: 10 * time.Second}
 
 	seen := make(map[string]bool)
 	found := 0
-	for _, res := range results {
-		names := strings.Split(res.NameValue, "\n")
-		if res.CommonName != "" {
-			names = append(names, res.CommonName)
+
+	resp, err := client.Get(crtURL)
+	if err == nil && resp.StatusCode == 200 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		var results []struct {
+			NameValue  string `json:"name_value"`
+			CommonName string `json:"common_name"`
 		}
-		for _, sub := range names {
-			sub = strings.TrimSpace(sub)
-			if sub == "" || strings.Contains(sub, "*") || seen[sub] {
-				continue
-			}
-			seen[sub] = true
-			ips, err := net.LookupHost(sub)
-			if err == nil {
-				for _, ip := range ips {
-					if r.AddCandidate(ip, "Crt.sh Leak") {
-						found++
+		if json.Unmarshal(bodyBytes, &results) == nil {
+			for _, res := range results {
+				for _, sub := range strings.Split(res.NameValue, "\n") {
+					sub = strings.TrimSpace(sub)
+					if sub == "" || strings.Contains(sub, "*") || seen[sub] {
+						continue
+					}
+					seen[sub] = true
+					ips, err := net.LookupHost(sub)
+					if err == nil {
+						for _, ip := range ips {
+							if r.AddCandidate(ip, "Crt.sh Leak") {
+								found++
+							}
+						}
 					}
 				}
+			}
+		}
+	} else {
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+
+	// Fallback: CertSpotter API (free, no auth)
+	if found == 0 {
+		spotURL := fmt.Sprintf("https://api.certspotter.com/v1/issuances?domain=%s&include_subdomains=true&expand=dns_names", r.Domain)
+		resp2, err := client.Get(spotURL)
+		if err == nil && resp2.StatusCode == 200 {
+			bodyBytes, _ := io.ReadAll(resp2.Body)
+			resp2.Body.Close()
+			var certs []struct {
+				DNSNames []string `json:"dns_names"`
+			}
+			if json.Unmarshal(bodyBytes, &certs) == nil {
+				for _, cert := range certs {
+					for _, name := range cert.DNSNames {
+						name = strings.TrimSpace(name)
+						if name == "" || strings.Contains(name, "*") || seen[name] {
+							continue
+						}
+						seen[name] = true
+						ips, err := net.LookupHost(name)
+						if err == nil {
+							for _, ip := range ips {
+								if r.AddCandidate(ip, "CertSpotter") {
+									found++
+								}
+							}
+						}
+					}
+				}
+			}
+		} else {
+			if resp2 != nil {
+				resp2.Body.Close()
 			}
 		}
 	}
 
 	if found == 0 {
-		fmt.Println(" └── No actionable IPs found via Crt.sh.")
+		yellow.Println(" └── No CT data found (crt.sh + CertSpotter).")
 	} else {
-		hiGreen.Printf(" └── [OK] Discovered %d potential origins via Crt.sh\n", found)
+		hiGreen.Printf(" └── [OK] Discovered %d origins via CT logs.\n", found)
 	}
 }
 
@@ -419,8 +454,11 @@ func (r *OriginReaper) HostHeaderVerify() {
 
 	client := &http.Client{
 		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse // Don't follow redirects
+			return http.ErrUseLastResponse
 		},
 	}
 
@@ -440,16 +478,38 @@ func (r *OriginReaper) HostHeaderVerify() {
 			if err != nil {
 				continue
 			}
+
+			bodyBytes, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
+
+			size := len(bodyBytes)
+			title := ""
+			re := regexp.MustCompile(`(?i)<title>(.*?)</title>`)
+			matches := re.FindStringSubmatch(string(bodyBytes))
+			if len(matches) > 1 {
+				title = strings.TrimSpace(matches[1])
+				// Truncate title if too long
+				if len(title) > 30 {
+					title = title[:27] + "..."
+				}
+			}
 
 			code := resp.StatusCode
 			if code == 200 || code == 301 || code == 302 || code == 403 {
-				vitalStyle.Printf(" └── [CONFIRMED] %s -> HTTP %d (%s) Host: %s\n", ip, code, scheme, r.Domain)
+				titleStr := ""
+				if title != "" {
+					titleStr = fmt.Sprintf(" | Title: %s", title)
+				}
+				vitalStyle.Printf(" └── [CONFIRMED] %s -> HTTP %d (%s) Host: %s%s [Size: %dB]\n", ip, code, scheme, r.Domain, titleStr, size)
 				r.mu.Lock()
 				if c, ok := r.Results[ip]; ok {
 					c.Confirmed = true
 					c.Verified = true
-					c.Details = fmt.Sprintf("HTTP %d %s", code, scheme)
+					if title != "" {
+						c.Details = fmt.Sprintf("HTTP %d | %s", code, title)
+					} else {
+						c.Details = fmt.Sprintf("HTTP %d %s", code, scheme)
+					}
 				}
 				r.mu.Unlock()
 				confirmed++
