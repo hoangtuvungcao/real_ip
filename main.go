@@ -661,7 +661,7 @@ func main() {
 		}
 
 		if len(reaper.Results) > 0 {
-			white.Println("\n ┌──────────────────── TARGET REPORT ────────────────────┐")
+			white.Println("\n ┌───────────────── TARGET REPORT ──────────────────┐")
 			for ip, c := range reaper.Results {
 				statusTag := "POTENTIAL "
 				if c.Confirmed {
@@ -682,7 +682,7 @@ func main() {
 					hiYellow.Println(line)
 				}
 			}
-			white.Println(" └──────────────────────────────────────────────────────┘")
+			white.Println(" └──────────────────────────────────────────────────┘")
 		}
 	}
 }
