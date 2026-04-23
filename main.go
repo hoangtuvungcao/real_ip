@@ -362,8 +362,12 @@ func (r *OriginReaper) VerifyUTLS(ip string) bool {
 			if strings.Contains(n, r.Domain) {
 				vitalStyle.Printf("\n 💎 [DOMINANT MATCH] SNI Validated: %sカバー: %s\n", ip, n)
 				r.mu.Lock()
-				r.Results[ip].Verified = true
-				r.Results[ip].Details += " [SNI_VERIFIED]"
+				if existing, ok := r.Results[ip]; ok {
+					existing.Verified = true
+					existing.Details += " [SNI_VERIFIED]"
+				} else {
+					r.Results[ip] = &OriginCandidate{IP: ip, Vector: "SNI Verified", Verified: true, Details: "[SNI_VERIFIED]"}
+				}
 				r.mu.Unlock()
 				return true
 			}
