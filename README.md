@@ -17,11 +17,13 @@ Combines multiple recon vectors to find the real server IP behind Cloudflare-pro
 ## Features
 
 - **Shodan OSINT** — queries historical database for hostname and SSL certificate leaks
-- **Crt.sh** — extracts subdomains from Certificate Transparency logs
+- **Crt.sh & CertSpotter** — extracts subdomains from Certificate Transparency logs (with auto-fallback)
 - **HackerTarget** — harvests historical DNS records from passive database
 - **Subdomain brute-force** — 24,000+ embedded wordlist, 500 concurrent workers
 - **Subnet /24 scan** — scans entire IP block around discovered origins with uTLS verification
 - **Timing side-channel** — measures RTT deltas to map network proximity to origin
+- **Host Header Verification** — probes IPs directly with HTTP(S) `Host` request to confirm origin identity
+- **Web Content Parsing** — extracts HTML `<title>` and `Content-Length` to distinguish real sites from parking pages
 - **uTLS Chrome mimicry** — spoofs JA3/JA4 TLS fingerprints to bypass WAF bot detection
 - **Cloudflare auto-filter** — dynamically fetches and filters all CF IP ranges
 
@@ -53,7 +55,7 @@ Select `7` for full auto recon (runs all vectors):
 ```
  ╔════════ TITAN GOD CONTROL CENTER ════════╗
  ║ 1. Open Source Intelligence (Shodan)     ║
- ║ 2. Deep OSINT (Crt.sh & HackerTarget)   ║
+ ║ 2. Deep OSINT (Crt.sh & HackerTarget)    ║
  ║ 3. Tactical Subdomain Extraction         ║
  ║ 4. Network Surveillance (Subnet /24)     ║
  ║ 5. Timing Side-Channel Analysis          ║
@@ -65,20 +67,19 @@ Select `7` for full auto recon (runs all vectors):
 
 ## Example
 
-```
- [PHASE 0.2] HackerTarget Historical DNS Recon
- └── [OK] Discovered 1 historical origins.
+```text
+ [*] Progress: [ 100.0% ] 000.example.com  
 
- [PHASE 1] Hyper-Massive Subdomain Recon (24447 keys)
- [*] [FOUND] 103.92.26.115 (Subdomain Leak)
- └── [DONE] Subdomain scan complete.
+ ┌── [ PHASE 4 ] HTTP Host Header Origin Confirmation
+ └── [CONFIRMED] 118.69.84.237 -> HTTP 200 (https) Host: example.com | Title: The Real Site [Size: 625097B]
+ └── [CONFIRMED] 184.168.98.97 -> HTTP 200 (http) Host: example.com | Title: Coming Soon Webmail [Size: 1963B]
+ └── 118.69.84.247 -> HTTP 404 (http) - not a match
 
- [PHASE 2] Subnet Surveillance (CIDR /24)
- 📡 Deep Scanning Segment: 103.92.26.0/24...
-
- ┌──────────────────── TARGET REPORT ────────────────────┐
- │ VERIFIED  │ 103.92.26.115   │ Subdomain Leak     │
- └──────────────────────────────────────────────────────┘
+ ==================== TARGET REPORT ====================
+ [CONFIRMED] 118.69.84.237   | HTTP 200 | The Real Site
+ [CONFIRMED] 184.168.98.97   | HTTP 200 | Coming Soon Webmail
+ [POTENTIAL] 118.69.84.200   | CertSpotter
+ =======================================================
 ```
 
 ## How it works
