@@ -661,19 +661,19 @@ func main() {
 		}
 
 		if len(reaper.Results) > 0 {
-			white.Println("\n ┌───────────────── TARGET REPORT ──────────────────┐")
+			white.Println("\n ════════════════ TARGET REPORT ════════════════")
 			for ip, c := range reaper.Results {
-				statusTag := "POTENTIAL "
+				statusTag := "[POTENTIAL]"
 				if c.Confirmed {
-					statusTag = "CONFIRMED "
+					statusTag = "[CONFIRMED]"
 				} else if c.Verified {
-					statusTag = "VERIFIED  "
+					statusTag = "[VERIFIED] "
 				}
 				detail := c.Vector
 				if c.Details != "" {
 					detail = c.Details
 				}
-				line := fmt.Sprintf(" │ %s │ %-15s │ %-18s │", statusTag, ip, detail)
+				line := fmt.Sprintf(" %s %-15s → %s", statusTag, ip, detail)
 				if c.Confirmed {
 					hiGreen.Println(line)
 				} else if c.Verified {
@@ -682,7 +682,7 @@ func main() {
 					hiYellow.Println(line)
 				}
 			}
-			white.Println(" └──────────────────────────────────────────────────┘")
+			white.Println(" ═══════════════════════════════════════════════")
 		}
 	}
 }
