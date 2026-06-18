@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"embed"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -30,28 +31,22 @@ const (
 	CloudflareIPv6URL = "https://www.cloudflare.com/ips-v6"
 	Workers           = 500
 	Timeout           = 3 * time.Second
-	ShodanAPIKey      = "aCfjD5pzHZv60uzUXbdNf4SCTExJUt0s"
 )
 
 var (
-	totalTested  int64
-	dnsErrors    int64
 	DNSResolvers = []string{"1.1.1.1:53", "8.8.8.8:53", "9.9.9.9:53", "1.0.0.1:53", "8.8.4.4:53", "208.67.222.222:53"}
 	cyan         = color.New(color.FgCyan).Add(color.Bold)
 	green        = color.New(color.FgGreen).Add(color.Bold)
 	yellow       = color.New(color.FgYellow).Add(color.Bold)
 	red          = color.New(color.FgRed).Add(color.Bold)
 	magenta      = color.New(color.FgMagenta).Add(color.Bold)
-	blue         = color.New(color.FgBlue).Add(color.Bold)
 	white        = color.New(color.FgWhite).Add(color.Bold)
 	hiGreen      = color.New(color.FgHiGreen).Add(color.Bold)
-	hiRed        = color.New(color.FgHiRed).Add(color.Bold)
-	hiMagenta    = color.New(color.FgHiMagenta).Add(color.Bold)
 	hiYellow     = color.New(color.FgHiYellow).Add(color.Bold)
+	hiMagenta    = color.New(color.FgHiMagenta).Add(color.Bold)
 
 	vitalStyle   = color.New(color.FgHiGreen).Add(color.Underline).Add(color.Bold)
 	headerStyle  = color.New(color.FgHiMagenta).Add(color.Bold)
-	bracketStyle = color.New(color.FgHiWhite).Add(color.Bold)
 )
 
 type ShodanResponse struct {
@@ -80,12 +75,48 @@ type OriginReaper struct {
 	DOMStructure string
 	CFLatency    time.Duration
 	mu           sync.Mutex
+
+	// Concurrency safe stats
+	totalTested int64
+	dnsErrors   int64
+
+	// Logger callback (nil defaults to console printing)
+	LogFunc func(format string, args ...interface{})
 }
 
 func NewOriginReaper(domain string) *OriginReaper {
 	return &OriginReaper{
 		Domain:  domain,
 		Results: make(map[string]*OriginCandidate),
+	}
+}
+
+func (r *OriginReaper) Log(format string, args ...interface{}) {
+	if r.LogFunc != nil {
+		r.LogFunc(format, args...)
+	} else {
+		fmt.Printf(format, args...)
+	}
+}
+
+func translateVector(v string) string {
+	switch v {
+	case "Shodan OSINT":
+		return "Shodan OSINT"
+	case "Crt.sh Leak":
+		return "Rò rỉ Crt.sh"
+	case "HackerTarget":
+		return "Lịch sử HackerTarget"
+	case "Subdomain Leak":
+		return "Rò rỉ Subdomain"
+	case "Subnet Discovery":
+		return "Dò quét Subnet"
+	case "SNI Verified":
+		return "Xác thực SNI"
+	case "CertSpotter":
+		return "CertSpotter"
+	default:
+		return v
 	}
 }
 
@@ -104,9 +135,7 @@ func (r *OriginReaper) IsNoiseIP(ipStr string) bool {
 }
 
 func (r *OriginReaper) FetchCloudflareIPs() {
-	cyan.Print(" ┌── ")
-	white.Print("Fetching Cloudflare Networks...")
-	fmt.Println()
+	r.Log(" ┌── Đang tải dải IP của Cloudflare...\n")
 	urls := []string{CloudflareIPv4URL, CloudflareIPv6URL}
 	for _, url := range urls {
 		resp, err := http.Get(url)
@@ -128,7 +157,7 @@ func (r *OriginReaper) FetchCloudflareIPs() {
 			r.CFNetworks = append(r.CFNetworks, ipnet)
 		}
 	}
-	green.Printf(" └── [OK] Loaded %d Cloudflare ranges\n", len(r.CFNetworks))
+	r.Log(" └── [OK] Đã tải %d dải IP Cloudflare thành công\n", len(r.CFNetworks))
 }
 
 func (r *OriginReaper) IsCloudflareIP(ipStr string) bool {
@@ -170,7 +199,7 @@ func (r *OriginReaper) AddCandidate(ip, vector string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.Results[ip]; !ok {
-		green.Printf("\x1b[2K\r ⚡ [FOUND] %s (%s)\n", ip, vector)
+		r.Log(" [+] [%s] Phát hiện IP ứng viên: %s\n", translateVector(vector), ip)
 		r.Results[ip] = &OriginCandidate{IP: ip, Vector: vector}
 		return true
 	}
@@ -178,13 +207,18 @@ func (r *OriginReaper) AddCandidate(ip, vector string) bool {
 }
 
 func (r *OriginReaper) ShodanOSINT() {
-	headerStyle.Println("\n ┌── [ PHASE 0 ] Shodan Intelligence Leak Search")
+	r.Log("\n ┌── [ BƯỚC 0 ] Tìm kiếm rò rỉ lịch sử qua Shodan\n")
+	apiKey := GetConfig().ShodanAPIKey
+	if apiKey == "" {
+		apiKey = "aCfjD5pzHZv60uzUXbdNf4SCTExJUts0" // Fallback
+	}
 	query := fmt.Sprintf("hostname:%s", r.Domain)
-	url := fmt.Sprintf("https://api.shodan.io/shodan/host/search?key=%s&query=%s", ShodanAPIKey, query)
+	url := fmt.Sprintf("https://api.shodan.io/shodan/host/search?key=%s&query=%s", apiKey, query)
 
 	c := &http.Client{Timeout: Timeout}
 	res, err := c.Get(url)
 	if err != nil {
+		r.Log(" └── Lỗi kết nối API Shodan.\n")
 		return
 	}
 	defer res.Body.Close()
@@ -200,19 +234,18 @@ func (r *OriginReaper) ShodanOSINT() {
 			}
 		}
 		if found > 0 {
-			hiGreen.Printf(" └── [OK] %d non-CF origins via Shodan.\n", found)
+			r.Log(" └── [OK] Tìm thấy %d IP gốc không qua Cloudflare từ dữ liệu Shodan.\n", found)
 		} else {
-			yellow.Println(" └── Shodan data found, but all IPs are Cloudflare.")
+			r.Log(" └── Tìm thấy dữ liệu Shodan, nhưng tất cả IP đều thuộc Cloudflare.\n")
 		}
 	} else {
-		yellow.Println(" └── No historical data found in Shodan.")
+		r.Log(" └── Không tìm thấy lịch sử dữ liệu của tên miền này trên Shodan.\n")
 	}
 }
 
 func (r *OriginReaper) SearchCrtSh() {
-	headerStyle.Println("\n ┌── [ PHASE 0.1 ] Certificate Transparency Recon")
+	r.Log("\n ┌── [ BƯỚC 0.1 ] Quét dữ liệu Certificate Transparency (CT logs)\n")
 
-	// Try crt.sh JSON API first
 	crtURL := fmt.Sprintf("https://crt.sh/?q=%%25.%s&output=json", r.Domain)
 	client := &http.Client{Timeout: 10 * time.Second}
 
@@ -252,7 +285,7 @@ func (r *OriginReaper) SearchCrtSh() {
 		}
 	}
 
-	// Fallback: CertSpotter API (free, no auth)
+	// Fallback: CertSpotter API
 	if found == 0 {
 		spotURL := fmt.Sprintf("https://api.certspotter.com/v1/issuances?domain=%s&include_subdomains=true&expand=dns_names", r.Domain)
 		resp2, err := client.Get(spotURL)
@@ -289,20 +322,20 @@ func (r *OriginReaper) SearchCrtSh() {
 	}
 
 	if found == 0 {
-		yellow.Println(" └── No CT data found (crt.sh + CertSpotter).")
+		r.Log(" └── Không tìm thấy dữ liệu CT logs (crt.sh & CertSpotter).\n")
 	} else {
-		hiGreen.Printf(" └── [OK] Discovered %d origins via CT logs.\n", found)
+		r.Log(" └── [OK] Phát hiện %d IP gốc từ lịch sử CT logs.\n", found)
 	}
 }
 
 func (r *OriginReaper) SearchHackerTarget() {
-	headerStyle.Println("\n ┌── [ PHASE 0.2 ] HackerTarget Historical DNS Recon")
+	r.Log("\n ┌── [ BƯỚC 0.2 ] Dò tìm lịch sử DNS qua HackerTarget\n")
 	url := fmt.Sprintf("https://api.hackertarget.com/hostsearch/?q=%s", r.Domain)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		red.Println(" └── [!] HackerTarget connection failed.")
+		r.Log(" └── [!] Lỗi kết nối đến HackerTarget.\n")
 		return
 	}
 	defer resp.Body.Close()
@@ -325,23 +358,22 @@ func (r *OriginReaper) SearchHackerTarget() {
 	}
 
 	if found == 0 {
-		fmt.Println(" └── No historical IP leaks found via HackerTarget.")
+		r.Log(" └── Không tìm thấy lịch sử rò rỉ IP qua HackerTarget.\n")
 	} else {
-		hiGreen.Printf(" └── [OK] Discovered %d historical origins.\n", found)
+		r.Log(" └── [OK] Phát hiện %d IP gốc lịch sử qua HackerTarget.\n", found)
 	}
 }
 
 func (r *OriginReaper) ResolveSubdomains() {
-	headerStyle.Printf("\n ┌── [ PHASE 1 ] Hyper-Massive Subdomain Recon (%d keys)\n", len(r.Subdomains))
+	r.Log("\n ┌── [ BƯỚC 1 ] Dò quét Subdomain diện rộng (%d từ khóa)\n", len(r.Subdomains))
 	var wg sync.WaitGroup
 	jobs := make(chan string, len(r.Subdomains))
-	atomic.StoreInt64(&totalTested, 0)
+	atomic.StoreInt64(&r.totalTested, 0)
 
 	for i := 0; i < Workers; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			// Round-robin public DNS to avoid local DNS saturation
 			addr := DNSResolvers[id%len(DNSResolvers)]
 			resolver := &net.Resolver{
 				PreferGo: true,
@@ -356,10 +388,13 @@ func (r *OriginReaper) ResolveSubdomains() {
 				ips, err := resolver.LookupHost(ctx, target)
 				cancel()
 
-				current := atomic.AddInt64(&totalTested, 1)
+				current := atomic.AddInt64(&r.totalTested, 1)
 				if current%500 == 0 {
 					pct := (float64(current) / float64(len(r.Subdomains))) * 100
-					fmt.Printf("\r ⚡ Progress: [ %.1f%% ] %s  ", pct, target)
+					// Clear line and print progress on CLI, or print standard updates
+					if r.LogFunc == nil {
+						fmt.Printf("\r [*] Tiến trình: [ %.1f%% ] Đang kiểm tra %s  ", pct, target)
+					}
 				}
 
 				if err == nil {
@@ -376,7 +411,7 @@ func (r *OriginReaper) ResolveSubdomains() {
 	}
 	close(jobs)
 	wg.Wait()
-	fmt.Printf("\r └── [DONE] Subdomain scan complete.                                   \n")
+	r.Log("\n └── [DONE] Đã hoàn tất quét subdomain.                                   \n")
 }
 
 func (r *OriginReaper) VerifyUTLS(ip string) bool {
@@ -396,7 +431,7 @@ func (r *OriginReaper) VerifyUTLS(ip string) bool {
 	if len(state.PeerCertificates) > 0 {
 		for _, n := range state.PeerCertificates[0].DNSNames {
 			if strings.Contains(n, r.Domain) {
-				vitalStyle.Printf("\n 💎 [DOMINANT MATCH] SNI Validated: %sカバー: %s\n", ip, n)
+				r.Log(" [*] Đã xác thực SNI: %s (%s)\n", ip, n)
 				r.mu.Lock()
 				if existing, ok := r.Results[ip]; ok {
 					if !existing.Verified {
@@ -415,7 +450,7 @@ func (r *OriginReaper) VerifyUTLS(ip string) bool {
 }
 
 func (r *OriginReaper) TimingAnalysis() {
-	headerStyle.Println("\n ┌── [ PHASE 3 ] Timing Side-Channel Delta Analysis")
+	r.Log("\n ┌── [ BƯỚC 3 ] Phân tích độ trễ kênh bên (Timing Side-Channel Delta)\n")
 	r.mu.Lock()
 	var candidates []*OriginCandidate
 	for _, c := range r.Results {
@@ -433,13 +468,13 @@ func (r *OriginReaper) TimingAnalysis() {
 			if diff < 0 {
 				diff = -diff
 			}
-			fmt.Printf(" └── IP: %-15s | RTT: %-12s | Δ: %s\n", c.IP, c.Latency, diff)
+			r.Log(" └── IP: %-15s | RTT: %-12s | Độ lệch Δ: %s\n", c.IP, c.Latency, diff)
 		}
 	}
 }
 
 func (r *OriginReaper) HostHeaderVerify() {
-	headerStyle.Println("\n ┌── [ PHASE 4 ] HTTP Host Header Origin Confirmation")
+	r.Log("\n ┌── [ BƯỚC 4 ] Xác thực IP gốc qua HTTP Host Header\n")
 	r.mu.Lock()
 	var ips []string
 	for ip := range r.Results {
@@ -448,7 +483,7 @@ func (r *OriginReaper) HostHeaderVerify() {
 	r.mu.Unlock()
 
 	if len(ips) == 0 {
-		yellow.Println(" └── No candidates to verify.")
+		r.Log(" └── Không có IP ứng viên nào để xác thực.\n")
 		return
 	}
 
@@ -464,7 +499,6 @@ func (r *OriginReaper) HostHeaderVerify() {
 
 	confirmed := 0
 	for _, ip := range ips {
-		// Try HTTPS first, then HTTP
 		for _, scheme := range []string{"https", "http"} {
 			url := fmt.Sprintf("%s://%s/", scheme, ip)
 			req, err := http.NewRequest("GET", url, nil)
@@ -488,7 +522,6 @@ func (r *OriginReaper) HostHeaderVerify() {
 			matches := re.FindStringSubmatch(string(bodyBytes))
 			if len(matches) > 1 {
 				title = strings.TrimSpace(matches[1])
-				// Truncate title if too long
 				if len(title) > 30 {
 					title = title[:27] + "..."
 				}
@@ -498,9 +531,9 @@ func (r *OriginReaper) HostHeaderVerify() {
 			if code == 200 || code == 301 || code == 302 || code == 403 {
 				titleStr := ""
 				if title != "" {
-					titleStr = fmt.Sprintf(" | Title: %s", title)
+					titleStr = fmt.Sprintf(" | Tiêu đề: %s", title)
 				}
-				vitalStyle.Printf(" └── [CONFIRMED] %s -> HTTP %d (%s) Host: %s%s [Size: %dB]\n", ip, code, scheme, r.Domain, titleStr, size)
+				r.Log(" └── [XÁC NHẬN GỐC] %s -> HTTP %d (%s) Host: %s%s [Kích thước: %dB]\n", ip, code, scheme, r.Domain, titleStr, size)
 				r.mu.Lock()
 				if c, ok := r.Results[ip]; ok {
 					c.Confirmed = true
@@ -515,20 +548,20 @@ func (r *OriginReaper) HostHeaderVerify() {
 				confirmed++
 				break
 			} else {
-				fmt.Printf(" └── %s -> HTTP %d (%s) - not a match\n", ip, code, scheme)
+				r.Log(" └── %s -> HTTP %d (%s) - không khớp\n", ip, code, scheme)
 			}
 		}
 	}
 
 	if confirmed == 0 {
-		yellow.Println(" └── No IPs confirmed via Host Header.")
+		r.Log(" └── Không có IP nào được xác thực thành công qua Host Header.\n")
 	} else {
-		hiGreen.Printf(" └── [OK] %d origin(s) CONFIRMED via direct HTTP.\n", confirmed)
+		r.Log(" └── [OK] Đã XÁC NHẬN %d IP gốc qua kiểm tra HTTP trực tiếp.\n", confirmed)
 	}
 }
 
 func (r *OriginReaper) SubnetScan() {
-	headerStyle.Println("\n ┌── [ PHASE 2 ] Subnet Surveillance (CIDR /24)")
+	r.Log("\n ┌── [ BƯỚC 2 ] Quét các dải Subnet xung quanh IP (CIDR /24)\n")
 	r.mu.Lock()
 	var seeds []string
 	for ip := range r.Results {
@@ -548,7 +581,7 @@ func (r *OriginReaper) SubnetScan() {
 			continue
 		}
 		scanned[sb] = true
-		fmt.Printf(" 📡 Deep Scanning Segment: %s/24...\n", sb)
+		r.Log(" [*] Đang quét dải mạng: %s/24...\n", sb)
 		for i := 1; i < 255; i++ {
 			tip := net.IPv4(ip[0], ip[1], ip[2], byte(i)).String()
 			wg.Add(1)
@@ -575,22 +608,12 @@ func printBanner() {
 	hiMagenta.Println(" ██║   ██║██╔══██╗██║██║   ██║██║██║╚██╗██║██╔══██╗██╔══╝  ██╔══██║██╔═══╝ ██╔══╝  ██╔══██╗")
 	hiMagenta.Println(" ╚██████╔╝██║  ██║██║╚██████╔╝██║██║ ╚████║██║  ██║███████╗██║  ██║██║     ███████╗██║  ██║")
 	hiMagenta.Println("  ╚═════╝ ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝")
-	hiYellow.Println("                           --- TITAN GOD 2027 RELOADED ---")
+	hiYellow.Println("                           --- TITAN GOD 2027 RELOADED (VIETNAMESE) ---")
 	fmt.Println()
 }
 
-func main() {
-	// Enable Windows Virtual Terminal Sequences and UTF-8
-	if runtime.GOOS == "windows" {
-		color.NoColor = false // Force colors on Windows
-	}
-
+func runCLI(domain string) {
 	printBanner()
-	if len(os.Args) < 2 {
-		red.Println(" [!] ERR: Missing domain. Usage: ./origin <domain>")
-		return
-	}
-	domain := os.Args[1]
 	domain = strings.TrimPrefix(domain, "https://")
 	domain = strings.TrimPrefix(domain, "http://")
 	domain = strings.TrimSuffix(domain, "/")
@@ -601,27 +624,27 @@ func main() {
 	reaper.FetchCloudflareIPs()
 	reaper.LoadSubdomains()
 
-	cyan.Printf(" [*] Host Profile: %s\n", domain)
+	cyan.Printf(" [*] Cấu hình tên miền: %s\n", domain)
 	start := time.Now()
 	_, err := http.Get("https://" + domain)
 	if err == nil {
 		reaper.CFLatency = time.Since(start)
-		cyan.Printf(" [*] Network Origin Context (Cloudflare Edge): %v\n", reaper.CFLatency)
+		cyan.Printf(" [*] Độ trễ CDN Cloudflare Edge: %v\n", reaper.CFLatency)
 	}
 
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		headerStyle.Println("\n ╔════════ TITAN GOD CONTROL CENTER ════════╗")
-		fmt.Printf(" ║ %-40s ║\n", "1. Open Source Intelligence (Shodan)")
-		fmt.Printf(" ║ %-40s ║\n", "2. Deep OSINT (Crt.sh & HackerTarget)")
-		fmt.Printf(" ║ %-40s ║\n", "3. Tactical Subdomain Extraction")
-		fmt.Printf(" ║ %-40s ║\n", "4. Network Surveillance (Subnet /24)")
-		fmt.Printf(" ║ %-40s ║\n", "5. Timing Side-Channel Analysis")
-		fmt.Printf(" ║ %-40s ║\n", "6. Deep SSL Handshake (uTLS Chrome)")
-		fmt.Printf(" ║ %-40s ║\n", "7. FULL AUTO RECON (ULTIMATE)")
-		fmt.Printf(" ║ %-40s ║\n", "0. EXIT SYSTEM")
-		headerStyle.Println(" ╚══════════════════════════════════════════╝")
-		fmt.Print(" ❯ Select Operation: ")
+		headerStyle.Println("\n ╔════════ TRUNG TÂM ĐIỀU KHIỂN TITAN GOD ════════╗")
+		fmt.Printf(" ║ %-45s ║\n", "1. Tìm kiếm OSINT (Shodan)")
+		fmt.Printf(" ║ %-45s ║\n", "2. Quét sâu OSINT (Crt.sh & HackerTarget)")
+		fmt.Printf(" ║ %-45s ║\n", "3. Trích xuất Subdomain chiến thuật")
+		fmt.Printf(" ║ %-45s ║\n", "4. Giám sát dải mạng (Subnet /24)")
+		fmt.Printf(" ║ %-45s ║\n", "5. Phân tích trễ RTT (Timing Delta)")
+		fmt.Printf(" ║ %-45s ║\n", "6. Bắt tay SSL sâu (uTLS Chrome)")
+		fmt.Printf(" ║ %-45s ║\n", "7. QUÉT TỰ ĐỘNG TOÀN BỘ (FULL AUTO)")
+		fmt.Printf(" ║ %-45s ║\n", "0. THOÁT HỆ THỐNG")
+		headerStyle.Println(" ╚════════════════════════════════════════════════╝")
+		fmt.Print(" ❯ Chọn Thao Tác: ")
 
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
@@ -639,7 +662,7 @@ func main() {
 		case "5":
 			reaper.TimingAnalysis()
 		case "6":
-			headerStyle.Println("\n ┌── [ PHASE 5 ] Advanced SSL Handshake Validation")
+			headerStyle.Println("\n ┌── [ BƯỚC 5 ] Xác thực chứng chỉ SSL (uTLS Chrome)")
 			r := reaper.Results
 			for ip := range r {
 				reaper.VerifyUTLS(ip)
@@ -661,19 +684,19 @@ func main() {
 		}
 
 		if len(reaper.Results) > 0 {
-			white.Println("\n ════════════════ TARGET REPORT ════════════════")
+			white.Println("\n ==================== BÁO CÁO KẾT QUẢ TÌM THẤY ====================")
 			for ip, c := range reaper.Results {
-				statusTag := "[POTENTIAL]"
+				statusTag := "[NGHI VẤN]"
 				if c.Confirmed {
-					statusTag = "[CONFIRMED]"
+					statusTag = "[XÁC NHẬN GỐC]"
 				} else if c.Verified {
-					statusTag = "[VERIFIED] "
+					statusTag = "[XÁC THỰC SNI]"
 				}
-				detail := c.Vector
+				detail := translateVector(c.Vector)
 				if c.Details != "" {
 					detail = c.Details
 				}
-				line := fmt.Sprintf(" %s %-15s → %s", statusTag, ip, detail)
+				line := fmt.Sprintf(" %-15s %-15s | %s", statusTag, ip, detail)
 				if c.Confirmed {
 					hiGreen.Println(line)
 				} else if c.Verified {
@@ -682,7 +705,53 @@ func main() {
 					hiYellow.Println(line)
 				}
 			}
-			white.Println(" ═══════════════════════════════════════════════")
+			white.Println(" ==================================================================")
 		}
 	}
+}
+
+func main() {
+	if runtime.GOOS == "windows" {
+		color.NoColor = false
+	}
+
+	// Initialize config
+	if err := LoadConfig(); err != nil {
+		fmt.Printf("Lỗi tải file cấu hình: %v\n", err)
+	}
+
+	// Initialize users list
+	if err := InitUsersManager(); err != nil {
+		fmt.Printf("Lỗi tải danh sách người dùng: %v\n", err)
+	}
+
+	// Initialize log
+	InitLogger()
+
+	botFlag := flag.Bool("bot", false, "Chạy hệ thống dưới dạng Telegram Bot")
+	flag.Parse()
+
+	// If a domain argument is provided (not --bot and not flag), run CLI
+	args := flag.Args()
+	if len(args) > 0 && !*botFlag {
+		domain := args[0]
+		runCLI(domain)
+		return
+	}
+
+	// Otherwise start Telegram Bot if configured, or default to Bot
+	cfg := GetConfig()
+	if cfg.TelegramBotToken == "" {
+		fmt.Println("LƯU Ý: Không tìm thấy TELEGRAM_BOT_TOKEN trong config.json hoặc biến môi trường.")
+		fmt.Println("Để dùng CLI:  ./origin <domain>")
+		fmt.Println("Để dùng Bot: Vui lòng thêm Token vào file config.json hoặc xuất biến môi trường, sau đó chạy lại.")
+		// Wait, if they just ran CLI without arguments and no token is present, we shouldn't crash, we'll guide them.
+		if len(args) == 0 {
+			fmt.Println("\nKhởi động mặc định ở chế độ CLI cần tên miền. Sử dụng: ./origin <domain>")
+		}
+		return
+	}
+
+	LogEvent("Khởi động hệ thống Telegram Bot...")
+	StartTelegramBot()
 }

@@ -1,0 +1,10 @@
+[2026-06-19 02:53:46] Khởi động hệ thống Telegram Bot...
+[2026-06-19 02:53:50] Telegram Bot [real_ip_g_bot] đang chạy...
+[2026-06-19 02:55:21] Bắt đầu quét [Quét Nhanh] cho domain: soulmc.vn (Yêu cầu bởi ID: 8794276117)
+[2026-06-19 02:55:32] Quét hoàn tất cho soulmc.vn. Phát hiện: [64.29.17.1(CONFIRMED), 216.198.79.1(CONFIRMED), 103.216.126.102(POTENTIAL)]. Người yêu cầu: ID 8794276117 (katana_nettwork)
+[2026-06-19 02:56:01] Bắt đầu quét [Quét Đầy Đủ] cho domain: soulmc.vn (Yêu cầu bởi ID: 8794276117)
+[2026-06-19 02:57:08] Quét hoàn tất cho soulmc.vn. Phát hiện: [216.198.79.194(CONFIRMED), 64.29.17.130(CONFIRMED), 64.29.17.1(CONFIRMED), 64.29.17.3(CONFIRMED), 216.198.79.131(CONFIRMED), 216.198.79.129(CONFIRMED), 103.216.126.102(POTENTIAL), 160.250.134.171(POTENTIAL), 216.198.79.65(CONFIRMED), 64.29.17.65(CONFIRMED), 64.29.17.2(CONFIRMED), 64.29.17.129(CONFIRMED), 64.29.17.194(CONFIRMED), 216.198.79.195(CONFIRMED), 64.29.17.66(CONFIRMED), 216.198.79.66(CONFIRMED), 216.198.79.2(CONFIRMED), 216.198.79.130(CONFIRMED), 216.198.79.193(CONFIRMED), 64.29.17.193(CONFIRMED), 64.29.17.67(CONFIRMED), 216.198.79.1(CONFIRMED), 64.29.17.195(CONFIRMED), 64.29.17.131(CONFIRMED), 216.198.79.67(CONFIRMED), 216.198.79.3(CONFIRMED)]. Người yêu cầu: ID 8794276117 (katana_nettwork)
+[2026-06-19 02:57:55] Bắt đầu quét [Quét Nhanh] cho domain: soulmc.vn (Yêu cầu bởi ID: 8794276117)
+[2026-06-19 02:58:14] Quét hoàn tất cho soulmc.vn. Phát hiện: [216.198.79.1(CONFIRMED), 64.29.17.1(CONFIRMED), 103.216.126.102(POTENTIAL)]. Người yêu cầu: ID 8794276117 (katana_nettwork)
+[2026-06-19 02:59:06] Bắt đầu quét [Quét Đầy Đủ] cho domain: stress.vpsgen.com (Yêu cầu bởi ID: 8794276117)
+[2026-06-19 03:00:02] Quét hoàn tất cho stress.vpsgen.com. Phát hiện: []. Người yêu cầu: ID 8794276117 (katana_nettwork)
