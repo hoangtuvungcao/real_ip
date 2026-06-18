@@ -210,7 +210,7 @@ func (r *OriginReaper) ShodanOSINT() {
 	r.Log("\n ┌── [ BƯỚC 0 ] Tìm kiếm rò rỉ lịch sử qua Shodan\n")
 	apiKey := GetConfig().ShodanAPIKey
 	if apiKey == "" {
-		apiKey = "aCfjD5pzHZv60uzUXbdNf4SCTExJUts0" // Fallback
+		apiKey = "aCfjD5pzHZv60uzUXbdNf4SCTExJUt0s" // Fallback
 	}
 	query := fmt.Sprintf("hostname:%s", r.Domain)
 	url := fmt.Sprintf("https://api.shodan.io/shodan/host/search?key=%s&query=%s", apiKey, query)

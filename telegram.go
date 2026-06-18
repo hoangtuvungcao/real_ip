@@ -106,6 +106,10 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	if strings.HasPrefix(text, "/") {
 		parts := strings.Split(text, " ")
 		command := parts[0]
+		// Strip bot username from command: e.g. "/check@botname" -> "/check"
+		if idx := strings.Index(command, "@"); idx != -1 {
+			command = command[:idx]
+		}
 		args := parts[1:]
 
 		switch command {
@@ -131,7 +135,9 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		// Admin Commands
 		case "/admin":
 			if !isAdmin {
-				sendTextMessage(bot, chatID, "❌ Lệnh này chỉ dành cho Admin.")
+				if msg.Chat.IsPrivate() {
+					sendTextMessage(bot, chatID, "❌ Lệnh này chỉ dành cho Admin.")
+				}
 				return
 			}
 			sendAdminMenu(bot, chatID)
@@ -205,15 +211,9 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			}
 			sendStats(bot, chatID)
 		default:
-			sendTextMessage(bot, chatID, "❓ Lệnh không hợp lệ. Gửi <code>/help</code> để xem hướng dẫn.")
-		}
-	} else {
-		// Treat raw input as a fast check domain
-		domain := cleanDomain(text)
-		if domainPattern.MatchString(domain) {
-			runAsyncScan(bot, chatID, userID, username, domain, false)
-		} else {
-			sendTextMessage(bot, chatID, "❌ Tên miền không hợp lệ hoặc không đúng định dạng.\nVí dụ: <code>google.com</code>")
+			if msg.Chat.IsPrivate() {
+				sendTextMessage(bot, chatID, "❓ Lệnh không hợp lệ. Gửi <code>/help</code> để xem hướng dẫn.")
+			}
 		}
 	}
 }
