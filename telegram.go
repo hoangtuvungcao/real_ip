@@ -219,9 +219,72 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 }
 
 func sendTextMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
-	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ParseMode = tgbotapi.ModeHTML
-	_, _ = bot.Send(msg)
+	if len(text) <= 4000 {
+		msg := tgbotapi.NewMessage(chatID, text)
+		msg.ParseMode = tgbotapi.ModeHTML
+		_, err := bot.Send(msg)
+		if err != nil {
+			LogEvent("Lỗi gửi tin nhắn Telegram: %v", err)
+		}
+		return
+	}
+
+	lines := strings.Split(text, "\n")
+	var chunk strings.Builder
+	insidePre := false
+
+	for _, line := range lines {
+		lineLen := len(line) + 1
+		extraLen := 0
+		if insidePre {
+			extraLen = 6 // "</pre>"
+		}
+
+		if chunk.Len()+lineLen+extraLen > 4000 {
+			if chunk.Len() > 0 {
+				sendStr := chunk.String()
+				if insidePre {
+					sendStr += "</pre>"
+				}
+				msg := tgbotapi.NewMessage(chatID, sendStr)
+				msg.ParseMode = tgbotapi.ModeHTML
+				_, err := bot.Send(msg)
+				if err != nil {
+					LogEvent("Lỗi gửi tin nhắn Telegram (chunk): %v", err)
+				}
+				chunk.Reset()
+				if insidePre {
+					chunk.WriteString("<pre>")
+				}
+			}
+		}
+
+		if strings.Contains(line, "<pre>") {
+			insidePre = true
+		}
+
+		if chunk.Len() > 0 {
+			chunk.WriteString("\n")
+		}
+		chunk.WriteString(line)
+
+		if strings.Contains(line, "</pre>") {
+			insidePre = false
+		}
+	}
+
+	if chunk.Len() > 0 {
+		sendStr := chunk.String()
+		if insidePre {
+			sendStr += "</pre>"
+		}
+		msg := tgbotapi.NewMessage(chatID, sendStr)
+		msg.ParseMode = tgbotapi.ModeHTML
+		_, err := bot.Send(msg)
+		if err != nil {
+			LogEvent("Lỗi gửi tin nhắn Telegram (cuối): %v", err)
+		}
+	}
 }
 
 func sendStartMessage(bot *tgbotapi.BotAPI, chatID int64, firstName string) {
@@ -499,9 +562,7 @@ func runAsyncScan(bot *tgbotapi.BotAPI, chatID int64, userID int64, username str
 		}
 
 		// SSL Handshake check
-		for ip := range reaper.Results {
-			reaper.VerifyUTLS(ip)
-		}
+		reaper.VerifyAllUTLS()
 
 		// HTTP Host Header confirmation
 		reaper.HostHeaderVerify()

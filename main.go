@@ -198,6 +198,9 @@ func (r *OriginReaper) AddCandidate(ip, vector string) bool {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(r.Results) >= 150 {
+		return false
+	}
 	if _, ok := r.Results[ip]; !ok {
 		r.Log(" [+] [%s] Phát hiện IP ứng viên: %s\n", translateVector(vector), ip)
 		r.Results[ip] = &OriginCandidate{IP: ip, Vector: vector}
@@ -449,6 +452,29 @@ func (r *OriginReaper) VerifyUTLS(ip string) bool {
 	return false
 }
 
+func (r *OriginReaper) VerifyAllUTLS() {
+	r.mu.Lock()
+	var ips []string
+	for ip := range r.Results {
+		ips = append(ips, ip)
+	}
+	r.mu.Unlock()
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 20) // Limit concurrency to 20
+
+	for _, ip := range ips {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(targetIP string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			r.VerifyUTLS(targetIP)
+		}(ip)
+	}
+	wg.Wait()
+}
+
 func (r *OriginReaper) TimingAnalysis() {
 	r.Log("\n ┌── [ BƯỚC 3 ] Phân tích độ trễ kênh bên (Timing Side-Channel Delta)\n")
 	r.mu.Lock()
@@ -491,72 +517,88 @@ func (r *OriginReaper) HostHeaderVerify() {
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			DialContext: (&net.Dialer{
+				Timeout:   3 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 
-	confirmed := 0
+	var confirmed int64
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 20) // Limit concurrency to 20
+
 	for _, ip := range ips {
-		for _, scheme := range []string{"https", "http"} {
-			url := fmt.Sprintf("%s://%s/", scheme, ip)
-			req, err := http.NewRequest("GET", url, nil)
-			if err != nil {
-				continue
-			}
-			req.Host = r.Domain
-			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0")
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(targetIP string) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-			resp, err := client.Do(req)
-			if err != nil {
-				continue
-			}
-
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-
-			size := len(bodyBytes)
-			title := ""
-			re := regexp.MustCompile(`(?i)<title>(.*?)</title>`)
-			matches := re.FindStringSubmatch(string(bodyBytes))
-			if len(matches) > 1 {
-				title = strings.TrimSpace(matches[1])
-				if len(title) > 30 {
-					title = title[:27] + "..."
+			for _, scheme := range []string{"https", "http"} {
+				url := fmt.Sprintf("%s://%s/", scheme, targetIP)
+				req, err := http.NewRequest("GET", url, nil)
+				if err != nil {
+					continue
 				}
-			}
+				req.Host = r.Domain
+				req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0")
 
-			code := resp.StatusCode
-			if code == 200 || code == 301 || code == 302 || code == 403 {
-				titleStr := ""
-				if title != "" {
-					titleStr = fmt.Sprintf(" | Tiêu đề: %s", title)
+				resp, err := client.Do(req)
+				if err != nil {
+					continue
 				}
-				r.Log(" └── [XÁC NHẬN GỐC] %s -> HTTP %d (%s) Host: %s%s [Kích thước: %dB]\n", ip, code, scheme, r.Domain, titleStr, size)
-				r.mu.Lock()
-				if c, ok := r.Results[ip]; ok {
-					c.Confirmed = true
-					c.Verified = true
-					if title != "" {
-						c.Details = fmt.Sprintf("HTTP %d | %s", code, title)
-					} else {
-						c.Details = fmt.Sprintf("HTTP %d %s", code, scheme)
+
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+
+				size := len(bodyBytes)
+				title := ""
+				re := regexp.MustCompile(`(?i)<title>(.*?)</title>`)
+				matches := re.FindStringSubmatch(string(bodyBytes))
+				if len(matches) > 1 {
+					title = strings.TrimSpace(matches[1])
+					if len(title) > 30 {
+						title = title[:27] + "..."
 					}
 				}
-				r.mu.Unlock()
-				confirmed++
-				break
-			} else {
-				r.Log(" └── %s -> HTTP %d (%s) - không khớp\n", ip, code, scheme)
-			}
-		}
-	}
 
-	if confirmed == 0 {
+				code := resp.StatusCode
+				if code == 200 || code == 301 || code == 302 || code == 403 {
+					titleStr := ""
+					if title != "" {
+						titleStr = fmt.Sprintf(" | Tiêu đề: %s", title)
+					}
+					r.Log(" └── [XÁC NHẬN GỐC] %s -> HTTP %d (%s) Host: %s%s [Kích thước: %dB]\n", targetIP, code, scheme, r.Domain, titleStr, size)
+					r.mu.Lock()
+					if c, ok := r.Results[targetIP]; ok {
+						c.Confirmed = true
+						c.Verified = true
+						if title != "" {
+							c.Details = fmt.Sprintf("HTTP %d | %s", code, title)
+						} else {
+							c.Details = fmt.Sprintf("HTTP %d %s", code, scheme)
+						}
+					}
+					r.mu.Unlock()
+					atomic.AddInt64(&confirmed, 1)
+					break
+				} else {
+					r.Log(" └── %s -> HTTP %d (%s) - không khớp\n", targetIP, code, scheme)
+				}
+			}
+		}(ip)
+	}
+	wg.Wait()
+
+	confVal := atomic.LoadInt64(&confirmed)
+	if confVal == 0 {
 		r.Log(" └── Không có IP nào được xác thực thành công qua Host Header.\n")
 	} else {
-		r.Log(" └── [OK] Đã XÁC NHẬN %d IP gốc qua kiểm tra HTTP trực tiếp.\n", confirmed)
+		r.Log(" └── [OK] Đã XÁC NHẬN %d IP gốc qua kiểm tra HTTP trực tiếp.\n", confVal)
 	}
 }
 
@@ -663,10 +705,7 @@ func runCLI(domain string) {
 			reaper.TimingAnalysis()
 		case "6":
 			headerStyle.Println("\n ┌── [ BƯỚC 5 ] Xác thực chứng chỉ SSL (uTLS Chrome)")
-			r := reaper.Results
-			for ip := range r {
-				reaper.VerifyUTLS(ip)
-			}
+			reaper.VerifyAllUTLS()
 		case "7":
 			reaper.ShodanOSINT()
 			reaper.SearchCrtSh()
@@ -674,10 +713,7 @@ func runCLI(domain string) {
 			reaper.ResolveSubdomains()
 			reaper.SubnetScan()
 			reaper.TimingAnalysis()
-			r := reaper.Results
-			for ip := range r {
-				reaper.VerifyUTLS(ip)
-			}
+			reaper.VerifyAllUTLS()
 			reaper.HostHeaderVerify()
 		case "0":
 			return
